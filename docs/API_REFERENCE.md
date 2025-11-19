@@ -48,25 +48,49 @@ import 'package:logseq_dart/logseq_dart.dart';
 
 ### LogseqClient
 
-Main interface for interacting with Logseq graphs. Handles loading, parsing, and CRUD operations.
+Main interface for interacting with Logseq graphs. Uses database-backed storage with automatic file synchronization. Files are the ground truth; the database serves as a cache/index for performance.
 
 #### Constructor
 
 ```dart
-LogseqClient(String graphPath)
+LogseqClient(String graphPath, {LogseqClientConfig? config})
 ```
 
 Creates a client instance pointing to a Logseq graph directory.
 
 **Parameters:**
 - `graphPath` - Absolute path to the Logseq graph directory
+- `config` - Optional configuration (see `LogseqClientConfig` below)
 
 **Throws:** `FileSystemException` if the directory doesn't exist
 
 **Example:**
 ```dart
 final client = LogseqClient('/path/to/logseq/graph');
+await client.initialize(); // REQUIRED: Must initialize before use
+
+// With custom configuration
+final client = LogseqClient(
+  '/path/to/logseq/graph',
+  config: LogseqClientConfig(
+    maxCachedPages: 200,
+    enableFileWatcher: true,
+  ),
+);
+await client.initialize();
 ```
+
+#### Configuration
+
+**`LogseqClientConfig`**
+
+Configuration options for LogseqClient.
+
+**Properties:**
+- `maxCachedPages` → `int` - Maximum pages to cache (default: 100)
+- `maxCachedBlocks` → `int` - Maximum blocks to cache (default: 1000)
+- `enableFileWatcher` → `bool` - Enable automatic file sync (default: true, recommended)
+- `databasePath` → `String?` - Custom database path (default: `graphPath/.logseq/logseq.db`)
 
 #### Properties
 
@@ -79,6 +103,20 @@ final graph = client.graph; // Loads if needed
 ```
 
 #### Methods
+
+##### Initialization
+
+**`initialize()` → `Future<void>`**
+
+**REQUIRED:** Initializes the database, repositories, cache, and file watcher. Must be called before using any other methods.
+
+**Example:**
+```dart
+final client = LogseqClient('/path/to/logseq/graph');
+await client.initialize();
+```
+
+---
 
 ##### Loading & Reloading
 
@@ -144,12 +182,12 @@ final results = client.query()
 
 **`getPage(String pageName)` → `Page?`**
 
-Retrieves a page by name.
+Retrieves a page by name (synchronous, from cached graph).
 
 **Parameters:**
 - `pageName` - Name of the page to retrieve
 
-**Returns:** The `Page` or null if not found
+**Returns:** The `Page` or null if not found in loaded graph
 
 **Example:**
 ```dart
@@ -158,14 +196,30 @@ final page = client.getPage('My Page');
 
 ---
 
+**`getPageAsync(String pageName)` → `Future<Page?>`**
+
+Retrieves a page by name (asynchronous, from database).
+
+**Parameters:**
+- `pageName` - Name of the page to retrieve
+
+**Returns:** The `Page` or null if not found
+
+**Example:**
+```dart
+final page = await client.getPageAsync('My Page');
+```
+
+---
+
 **`getBlock(String blockId)` → `Block?`**
 
-Retrieves a block by ID.
+Retrieves a block by ID (synchronous, from cached graph).
 
 **Parameters:**
 - `blockId` - UUID of the block
 
-**Returns:** The `Block` or null if not found
+**Returns:** The `Block` or null if not found in loaded graph
 
 **Example:**
 ```dart
@@ -174,9 +228,25 @@ final block = client.getBlock('abc123...');
 
 ---
 
-**`search(String query, {bool caseSensitive = false})` → `Map<String, List<Block>>`**
+**`getBlockAsync(String blockId)` → `Future<Block?>`**
 
-Searches for text across all pages.
+Retrieves a block by ID (asynchronous, from database).
+
+**Parameters:**
+- `blockId` - UUID of the block
+
+**Returns:** The `Block` or null if not found
+
+**Example:**
+```dart
+final block = await client.getBlockAsync('abc123...');
+```
+
+---
+
+**`search(String query, {bool caseSensitive = false})` → `Future<Map<String, List<Block>>>`**
+
+Searches for text across all pages (asynchronous).
 
 **Parameters:**
 - `query` - Search string
@@ -186,7 +256,7 @@ Searches for text across all pages.
 
 **Example:**
 ```dart
-final results = client.search('important task');
+final results = await client.search('important task');
 ```
 
 ##### CRUD Operations
@@ -307,15 +377,15 @@ final deleted = await client.deleteBlock('block-id');
 
 ##### Analytics & Export
 
-**`getStatistics()` → `Map<String, dynamic>`**
+**`getStatistics()` → `Future<Map<String, dynamic>>`**
 
-Returns comprehensive graph statistics.
+Returns comprehensive graph statistics (asynchronous).
 
 **Returns:** Map containing statistics like total pages, blocks, tasks, etc.
 
 **Example:**
 ```dart
-final stats = client.getStatistics();
+final stats = await client.getStatistics();
 print('Pages: ${stats['totalPages']}');
 print('Tasks: ${stats['taskBlocks']}');
 ```
@@ -336,16 +406,29 @@ await client.exportToJson('/path/to/export.json');
 
 ---
 
-**`saveAll()` → `Future<int>`**
+##### Resource Management
 
-Saves all modified pages to disk.
+**`close()` → `Future<void>`**
 
-**Returns:** Number of pages saved
+Closes the client and cleans up resources (file watcher, database connections).
 
 **Example:**
 ```dart
-final count = await client.saveAll();
-print('Saved $count pages');
+await client.close();
+```
+
+---
+
+**`getCacheStats()` → `Map<String, int>`**
+
+Returns cache statistics for monitoring performance.
+
+**Returns:** Map with cache hit/miss statistics
+
+**Example:**
+```dart
+final stats = client.getCacheStats();
+print('Cache stats: $stats');
 ```
 
 ---
@@ -356,20 +439,43 @@ Container for the entire graph data. Accessed via `LogseqClient.graph`.
 
 #### Properties
 
+**Core Data:**
 - `rootPath` → `String` - Root directory of the graph
 - `pages` → `Map<String, Page>` - All pages indexed by name
 - `blocks` → `Map<String, Block>` - All blocks indexed by ID
 - `config` → `Map<String, dynamic>` - Graph configuration
-- `createdAt` → `DateTime` - When graph was loaded
-- `updatedAt` → `DateTime` - Last update timestamp
+
+**Advanced Features:**
+- `templates` → `Map<String, Template>` - Template definitions
+- `namespaces` → `Map<String, List<String>>` - Namespace to page names mapping
+- `whiteboards` → `Map<String, Page>` - Whiteboard pages
+- `plugins` → `Map<String, Map<String, dynamic>>` - Plugin data
+- `themes` → `Map<String, Map<String, dynamic>>` - Theme data
+- `customCss` → `String?` - Custom CSS content
+
+**Indexes for Fast Lookups:**
+- `aliasIndex` → `Map<String, String>` - Alias to page name mapping
+- `tagIndex` → `Map<String, Set<String>>` - Tag to page names mapping
 
 #### Methods
 
 ##### Page Access
 
+**`addPage(Page page)` → `void`**
+
+Adds a page to the graph and updates all indexes.
+
 **`getPage(String pageName)` → `Page?`**
 
-**`getAllPages()` → `List<Page>`**
+Gets a page by name.
+
+**`getPageByAlias(String alias)` → `Page?`**
+
+Gets a page by its alias.
+
+**`getPagesByTag(String tag)` → `List<Page>`**
+
+Returns pages containing a specific tag.
 
 **`getJournalPages()` → `List<Page>`**
 
@@ -379,7 +485,7 @@ Returns all journal pages sorted by date.
 
 Returns pages in a specific namespace (e.g., "project/backend").
 
-**`getAllNamespaces()` → `Set<String>`**
+**`getAllNamespaces()` → `List<String>`**
 
 Returns all unique namespaces in the graph.
 
@@ -387,11 +493,23 @@ Returns all unique namespaces in the graph.
 
 Returns names of pages that link to the specified page.
 
+**`getTemplate(String name)` → `Template?`**
+
+Gets a template by name.
+
+**`getAllTemplates()` → `List<Template>`**
+
+Returns all templates in the graph.
+
+**`getWhiteboards()` → `List<Page>`**
+
+Returns all whiteboard pages.
+
 ##### Block Access
 
 **`getBlock(String blockId)` → `Block?`**
 
-**`getAllBlocks()` → `List<Block>`**
+Gets a block by ID.
 
 **`getTaskBlocks()` → `List<Block>`**
 
@@ -401,13 +519,33 @@ Returns all task blocks (TODO, DOING, etc.).
 
 Returns only completed (DONE) tasks.
 
+**`searchBlocksByTaskState(TaskState state)` → `List<Block>`**
+
+Returns blocks with a specific task state.
+
+**`getScheduledBlocks({DateTime? dateFilter})` → `List<Block>`**
+
+Returns scheduled blocks. If `dateFilter` is provided, returns only blocks scheduled for that date.
+
+**`getBlocksWithDeadline({DateTime? dateFilter})` → `List<Block>`**
+
+Returns blocks with deadlines. If `dateFilter` is provided, returns only blocks with that deadline date.
+
+**`getBlocksByPriority(Priority priority)` → `List<Block>`**
+
+Returns blocks with a specific priority level.
+
 **`getCodeBlocks({String? language})` → `List<Block>`**
 
 Returns code blocks, optionally filtered by language.
 
-**`getBlocksByTag(String tag)` → `List<Block>`**
+**`getMathBlocks()` → `List<Block>`**
 
-Returns blocks containing a specific tag.
+Returns all blocks containing LaTeX/math content.
+
+**`getQueryBlocks()` → `List<Block>`**
+
+Returns all blocks containing Logseq queries.
 
 ##### Search
 
@@ -420,28 +558,29 @@ Searches for text across all content.
 **`getStatistics()` → `Map<String, dynamic>`**
 
 Returns statistics including:
-- `totalPages`, `totalBlocks`, `totalTags`
-- `journalPages`, `taskBlocks`, `completedTasks`
-- `codeBlocks`, `headingBlocks`, `mathBlocks`
-- `totalProperties`, `avgBlocksPerPage`
+- `totalPages`, `regularPages`, `journalPages`
+- `totalBlocks`, `totalTags`, `totalLinks`
+- `taskBlocks`, `completedTasks`, `scheduledBlocks`
+- `codeBlocks`, `queryBlocks`
+- `templates`, `namespaces`, `whiteboards`
+- `uniqueTags`, `uniqueLinks` - Sorted lists
 
 **`getWorkflowSummary()` → `Map<String, dynamic>`**
 
 Returns task workflow statistics:
 - `totalTasks` - Total task count
 - `taskStates` - Map of state → count
-- `priorities` - Map of priority → count
-- `completionRate` - Percentage of completed tasks
-- `scheduledCount`, `overdueCount`
+- `taskPriorities` - Map of priority → count
+- `scheduledTasks` - Number of scheduled tasks
+- `tasksWithDeadline` - Number of tasks with deadlines
 
 **`getGraphInsights()` → `Map<String, dynamic>`**
 
-Returns comprehensive insights:
+Returns comprehensive insights combining:
 - All statistics from `getStatistics()`
-- `mostConnectedPages` - List of [page, connection_count]
-- `mostUsedTags` - List of [tag, usage_count]
-- `blockTypeDistribution` - Map of type → count
-- `namespaceDistribution` - Map of namespace → page_count
+- `workflow` - Workflow summary from `getWorkflowSummary()`
+- `mostConnectedPages` - Top 10 pages by backlink count: [[page, count], ...]
+- `mostUsedTags` - Top 20 tags by usage: [[tag, count], ...]
 
 **`static isSameDay(DateTime a, DateTime b)` → `bool`**
 
@@ -673,6 +812,7 @@ Represents a Logseq page.
 
 #### Properties
 
+**Core Properties:**
 - `name` → `String` - Page name
 - `title` → `String` - Display title (derived from name)
 - `filePath` → `String?` - Path to markdown file
@@ -683,19 +823,39 @@ Represents a Logseq page.
 - `backlinks` → `Set<String>` - Pages linking to this page
 - `aliases` → `Set<String>` - Page aliases
 - `namespace` → `String?` - Namespace (e.g., "project")
+- `createdAt` → `DateTime?` - Creation timestamp
+- `updatedAt` → `DateTime?` - Last update timestamp
+
+**Page Types:**
 - `isJournal` → `bool` - Whether it's a journal page
 - `journalDate` → `DateTime?` - Journal date if applicable
 - `isTemplate` → `bool` - Whether it's a template
 - `isWhiteboard` → `bool` - Whether it's a whiteboard
+
+**Advanced Features:**
+- `templates` → `List<Template>` - Template definitions in this page
 - `annotations` → `List<Annotation>` - PDF annotations
-- `createdAt` → `DateTime` - Creation timestamp
-- `updatedAt` → `DateTime` - Last update timestamp
+- `pdfPath` → `String?` - Path to associated PDF file
+- `whiteboardData` → `Map<String, dynamic>?` - Whiteboard-specific data
+- `pluginData` → `Map<String, dynamic>` - Plugin-specific data
+
+**Hierarchy:**
+- `parentPages` → `Set<String>` - Parent pages in hierarchy
+- `childPages` → `Set<String>` - Child pages in hierarchy
 
 #### Methods
 
 **`addBlock(Block block)` → `void`**
 
 Add a block to the page.
+
+**`getBlockById(String blockId)` → `Block?`**
+
+Get a block by its ID.
+
+**`getBlocksByContent(String searchText, {bool caseSensitive = false})` → `List<Block>`**
+
+Find blocks containing specific text.
 
 **`getTaskBlocks()` → `List<Block>`**
 
@@ -705,33 +865,57 @@ Get all task blocks in page.
 
 Get completed tasks in page.
 
+**`getScheduledBlocks()` → `List<Block>`**
+
+Get all scheduled blocks.
+
+**`getBlocksWithDeadline()` → `List<Block>`**
+
+Get all blocks with deadlines.
+
+**`getBlocksByPriority(Priority priority)` → `List<Block>`**
+
+Get blocks with a specific priority.
+
 **`getCodeBlocks({String? language})` → `List<Block>`**
 
 Get code blocks, optionally filtered by language.
+
+**`getMathBlocks()` → `List<Block>`**
+
+Get blocks containing LaTeX/math content.
+
+**`getHeadingBlocks({int? level})` → `List<Block>`**
+
+Get heading blocks, optionally filtered by level.
+
+**`getQueryBlocks()` → `List<Block>`**
+
+Get all query blocks.
 
 **`getBlocksByTag(String tag)` → `List<Block>`**
 
 Get blocks with a specific tag.
 
-**`getBlocksByLevel(int level)` → `List<Block>`**
+**`getPageOutline()` → `Map<String, dynamic>`**
 
-Get blocks at a specific indentation level.
+Get hierarchical outline of page structure including headings, tasks, and block counts.
 
-**`getTopLevelBlocks()` → `List<Block>`**
+**`isNamespaceRoot()` → `bool`**
 
-Get root-level blocks (level 0).
-
-**`getPageOutline()` → `List<Map<String, dynamic>>`**
-
-Get hierarchical outline of page structure.
+Check if this page is a namespace root (no parent namespace).
 
 **`toMarkdown()` → `String`**
 
-Convert page to markdown format.
+Convert page to Logseq markdown format.
 
 **`toJson()` → `Map<String, dynamic>`**
 
 Convert to JSON representation.
+
+**`factory Page.fromJson(Map<String, dynamic>)` → `Page`**
+
+Create a Page from JSON data.
 
 ---
 
@@ -741,29 +925,41 @@ Represents a Logseq block.
 
 #### Properties
 
+**Core Properties:**
 - `id` → `String` - Unique UUID
 - `content` → `String` - Block content
 - `pageName` → `String?` - Parent page name
 - `level` → `int` - Indentation level (0 = top)
 - `parentId` → `String?` - Parent block ID
 - `childrenIds` → `List<String>` - Child block IDs
+- `properties` → `Map<String, dynamic>` - Block properties
+- `tags` → `Set<String>` - Tags in block
+- `createdAt` → `DateTime?` - Creation timestamp
+- `updatedAt` → `DateTime?` - Last update timestamp
+
+**Task Features:**
 - `taskState` → `TaskState?` - TODO state
 - `priority` → `Priority?` - Priority level (A/B/C)
 - `scheduled` → `ScheduledDate?` - Scheduled date
 - `deadline` → `ScheduledDate?` - Deadline date
+
+**Content Type:**
 - `blockType` → `BlockType` - Type of block
 - `headingLevel` → `int?` - Heading level (1-6)
 - `codeLanguage` → `String?` - Programming language for code blocks
 - `latexContent` → `String?` - LaTeX/math content
 - `query` → `LogseqQuery?` - Embedded query
-- `tags` → `Set<String>` - Tags in block
-- `properties` → `Map<String, dynamic>` - Block properties
 - `collapsed` → `bool` - Whether block is collapsed
+
+**References & Embeds:**
 - `referencedBlocks` → `Set<String>` - Referenced block IDs
 - `embeddedBlocks` → `List<BlockEmbed>` - Embedded blocks
+
+**Advanced Features:**
 - `annotations` → `List<Annotation>` - PDF annotations
-- `createdAt` → `DateTime` - Creation timestamp
-- `updatedAt` → `DateTime` - Last update timestamp
+- `drawingData` → `Map<String, dynamic>?` - Drawing/sketch data
+- `whiteboardElements` → `List<WhiteboardElement>` - Whiteboard elements
+- `pluginData` → `Map<String, dynamic>` - Plugin-specific data
 
 #### Methods
 
@@ -795,13 +991,25 @@ Extract all block references.
 
 Add a child block.
 
+**`getAllDates()` → `List<DateTime>`**
+
+Get all dates associated with this block (scheduled and deadline).
+
+**`copyWith({...})` → `Block`**
+
+Create a copy of this block with updated fields. Accepts optional parameters for all mutable fields.
+
 **`toMarkdown()` → `String`**
 
-Convert to markdown format.
+Convert to Logseq markdown format.
 
 **`toJson()` → `Map<String, dynamic>`**
 
 Convert to JSON representation.
+
+**`factory Block.fromJson(Map<String, dynamic>)` → `Block`**
+
+Create a Block from JSON data.
 
 ---
 
@@ -976,11 +1184,12 @@ print('Most used tag: ${tagFreq.entries.first.key}');
 import 'package:logseq_dart/logseq_dart.dart';
 
 void main() async {
-  // Initialize client
+  // Initialize client (REQUIRED)
   final client = LogseqClient('/path/to/logseq/graph');
+  await client.initialize();
 
-  // Load graph
-  final graph = client.loadGraphSync();
+  // Load graph from database
+  final graph = await client.loadGraph();
 
   // Create a new project page
   await client.createPage(
@@ -1009,16 +1218,23 @@ void main() async {
   // Get analytics
   final insights = graph.getGraphInsights();
   print('Total pages: ${insights['totalPages']}');
-  print('Completion rate: ${insights['completionRate']}%');
+  print('Most connected pages: ${insights['mostConnectedPages']}');
 
-  // Search content
-  final results = client.search('documentation');
+  // Get statistics
+  final stats = await client.getStatistics();
+  print('Total blocks: ${stats['totalBlocks']}');
+
+  // Search content (now async)
+  final results = await client.search('documentation');
   results.forEach((page, blocks) {
     print('$page: ${blocks.length} matches');
   });
 
   // Export to JSON
   await client.exportToJson('/path/to/backup.json');
+
+  // Cleanup when done
+  await client.close();
 }
 ```
 
