@@ -17,6 +17,10 @@ dependencies:
   collection: ^1.18.0
   equatable: ^2.0.5
   uuid: ^4.0.0
+  sqflite: ^2.3.0
+  sqflite_common_ffi: ^2.3.0
+  watcher: ^1.1.0
+  crypto: ^3.0.3
 
 dev_dependencies:
   flutter_test:
