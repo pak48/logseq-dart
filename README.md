@@ -48,10 +48,10 @@ Transform your Logseq workflow with programmatic access to every major feature. 
 ### 💾 Database-Backed Storage (New!)
 - ✅ **Memory Efficient**: Only caches recently accessed data, not entire graph
 - ✅ **Fast Queries**: SQLite indexes provide O(log n) lookups
-- ✅ **Auto-Sync**: File watcher keeps database and markdown files synchronized
+- ✅ **Files as Ground Truth**: Markdown files are always the source of truth
+- ✅ **Auto-Sync**: File watcher keeps database synchronized with file changes
 - ✅ **Scalable**: Works with graphs of any size without memory issues
 - ✅ **Same API**: Existing code continues to work with minimal changes
-- ✅ **Legacy Support**: Original in-memory client still available as `LogseqClientLegacy`
 
 ## 🚀 Quick Start
 

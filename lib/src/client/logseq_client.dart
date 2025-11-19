@@ -17,6 +17,10 @@ import '../storage/repositories/block_repository.dart';
 import '../storage/repositories/graph_repository.dart';
 
 /// Configuration for LogseqClient
+///
+/// IMPORTANT: Markdown files are the GROUND TRUTH.
+/// The database serves as a cache/index for performance.
+/// All writes go to files first, then database is updated.
 class LogseqClientConfig {
   /// Maximum number of pages to cache
   final int maxCachedPages;
@@ -24,7 +28,8 @@ class LogseqClientConfig {
   /// Maximum number of blocks to cache
   final int maxCachedBlocks;
 
-  /// Enable file system watcher
+  /// Enable file system watcher (recommended: true)
+  /// Keeps database synchronized with file changes
   final bool enableFileWatcher;
 
   /// Custom database path (default: graphPath/.logseq/logseq.db)
@@ -237,12 +242,12 @@ class LogseqClient {
       }
     }
 
-    // Save to database
-    await _pageRepository.savePage(page);
-
-    // Save to disk
+    // FILES ARE GROUND TRUTH: Write to disk first
     _fileWatcher?.ignoreNextWrite(filePath);
     await _savePageToFile(page);
+
+    // Then update database (cache/index)
+    await _pageRepository.savePage(page);
 
     // Add to graph if loaded
     if (_graph != null) {
@@ -269,14 +274,14 @@ class LogseqClient {
     final block = Block(content: content, pageName: pageName);
     page.addBlock(block);
 
-    // Save to database
-    await _pageRepository.savePage(page);
-
-    // Save to disk
+    // FILES ARE GROUND TRUTH: Write to disk first
     if (page.filePath != null) {
       _fileWatcher?.ignoreNextWrite(page.filePath!);
       await _savePageToFile(page);
     }
+
+    // Then update database (cache/index)
+    await _pageRepository.savePage(page);
 
     // Update graph if loaded
     if (_graph != null) {
@@ -305,12 +310,12 @@ class LogseqClient {
       journalDate: date,
     );
 
-    // Save to database
-    await _pageRepository.savePage(page);
-
-    // Save to disk
+    // FILES ARE GROUND TRUTH: Write to disk first
     _fileWatcher?.ignoreNextWrite(filePath);
     await _savePageToFile(page);
+
+    // Then update database (cache/index)
+    await _pageRepository.savePage(page);
 
     // Add to graph if loaded
     if (_graph != null) {
@@ -347,14 +352,14 @@ class LogseqClient {
     // Add to page
     page.addBlock(block);
 
-    // Save to database
-    await _pageRepository.savePage(page);
-
-    // Save to disk
+    // FILES ARE GROUND TRUTH: Write to disk first
     if (page.filePath != null) {
       _fileWatcher?.ignoreNextWrite(page.filePath!);
       await _savePageToFile(page);
     }
+
+    // Then update database (cache/index)
+    await _pageRepository.savePage(page);
 
     // Update graph if loaded
     if (_graph != null) {
@@ -386,14 +391,14 @@ class LogseqClient {
           page.blocks[blockIndex] = block;
         }
 
-        // Save to database
-        await _pageRepository.savePage(page);
-
-        // Save to disk
+        // FILES ARE GROUND TRUTH: Write to disk first
         if (page.filePath != null) {
           _fileWatcher?.ignoreNextWrite(page.filePath!);
           await _savePageToFile(page);
         }
+
+        // Then update database (cache/index)
+        await _pageRepository.savePage(page);
 
         // Update graph if loaded
         if (_graph != null) {
@@ -420,14 +425,14 @@ class LogseqClient {
     // Remove from page
     page.blocks.removeWhere((b) => b.id == blockId);
 
-    // Save to database
-    await _pageRepository.savePage(page);
-
-    // Save to disk
+    // FILES ARE GROUND TRUTH: Write to disk first
     if (page.filePath != null) {
       _fileWatcher?.ignoreNextWrite(page.filePath!);
       await _savePageToFile(page);
     }
+
+    // Then update database (cache/index)
+    await _pageRepository.savePage(page);
 
     // Update graph if loaded
     if (_graph != null) {
