@@ -283,7 +283,11 @@ void main() {
 }
 ```
 
-## 📖 API Documentation
+## 📖 Documentation
+
+**📚 [Quick Start Guide](docs/QUICK_START.md)** - Get up and running in 5 minutes
+
+**📘 [Complete API Reference](docs/API_REFERENCE.md)** - Full documentation of all classes and methods
 
 ### Core Classes
 
