@@ -6,11 +6,12 @@ This document describes the database-backed storage architecture for logseq-dart
 
 ## Architecture Principles
 
-1. **SQLite as Source of Truth**: Database serves as the primary data store
-2. **Automatic File Sync**: File system watcher maintains bi-directional sync with markdown files
-3. **Lazy Loading**: Data loaded from database on-demand instead of keeping everything in memory
-4. **API Compatibility**: Existing API remains unchanged for backward compatibility
-5. **Write-Through**: Changes written to both DB and markdown files immediately
+1. **Markdown Files as Ground Truth**: Files are the source of truth, database is a cache/index
+2. **Write-to-File-First**: All writes go to markdown files first, then database is updated
+3. **Automatic File Sync**: File system watcher keeps database synchronized with file changes
+4. **Lazy Loading**: Data loaded from database on-demand instead of keeping everything in memory
+5. **Database as Cache/Index**: Database provides fast queries and indexing, but files are authoritative
+6. **API Compatibility**: Existing API remains unchanged for backward compatibility
 
 ## Architecture Diagram
 
@@ -19,6 +20,13 @@ This document describes the database-backed storage architecture for logseq-dart
 │                     Application Layer                       │
 │                      (LogseqClient)                         │
 └────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+                    WRITE PATH
+         ┌──────────────────────────────┐
+         │  1. Write to Markdown File   │ ◄── GROUND TRUTH
+         │  2. Update Database Cache    │
+         └──────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
@@ -33,12 +41,12 @@ This document describes the database-backed storage architecture for logseq-dart
          ▼                                 ▼
 ┌─────────────────────┐         ┌──────────────────────────┐
 │   SQLite Database   │◄────────┤  File System Watcher    │
-│   (logseq.db)       │         │  (Markdown Sync)        │
+│   (Cache/Index)     │         │  (Syncs from Files)     │
 └─────────────────────┘         └────────┬─────────────────┘
          ▲                                │
          │                                ▼
          └────────────────────┬───────────────────────┐
-                              │  Markdown Files      │
+                              │  Markdown Files      │ ◄── GROUND TRUTH
                               │  - pages/*.md        │
                               │  - journals/*.md     │
                               └──────────────────────┘

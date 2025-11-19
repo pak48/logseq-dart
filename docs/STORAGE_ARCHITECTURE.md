@@ -16,23 +16,32 @@ Logseq Dart uses a **database-backed storage architecture** with automatic file 
 - LRU cache for hot data provides O(1) access
 - Complex queries executed efficiently via SQL
 
-### 3. Automatic Synchronization
+### 3. Files as Ground Truth
+- **Markdown files are always the source of truth**
+- Database is a cache/index for performance
+- All writes go to files first, then database
+- File watcher syncs database FROM files
+- External edits are automatically reflected
+
+### 4. Automatic Synchronization
 - File watcher monitors markdown files for changes
 - Changes automatically synced to database
-- Bi-directional sync: database ↔ markdown files
+- Database always reflects file state
 - No manual sync required
 
-### 4. Data Durability
-- SQLite transactions ensure data consistency
-- Database serves as source of truth
-- Markdown files remain portable and editable
+### 5. Data Durability
+- Markdown files are the persistent storage
+- SQLite transactions ensure database consistency
+- Database serves as cache/index
+- Files remain portable and editable in any editor
 
 ## Architecture Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                  LogseqClient (API Layer)                   │
-│           Same API as legacy in-memory version              │
+│                                                             │
+│  WRITE PATH: File First → Database Second                  │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
@@ -51,15 +60,15 @@ Logseq Dart uses a **database-backed storage architecture** with automatic file 
                      ▼                 ▼
        ┌──────────────────────┐   ┌──────────────────────────┐
        │  SQLite Database     │   │  File System Watcher     │
-       │  (.logseq/logseq.db) │◄─▶│  (Markdown Files)        │
+       │  (Cache/Index)       │◄──│  (Syncs FROM Files)      │
        └──────────────────────┘   └──────────────────────────┘
-                                           │
-                                           ▼
-                                  ┌────────────────────┐
-                                  │ Markdown Files     │
-                                  │ - pages/*.md       │
-                                  │ - journals/*.md    │
-                                  └────────────────────┘
+                ▲                              │
+                │                              ▼
+                │                     ┌────────────────────┐
+                └─────────────────────│ Markdown Files     │ ◄─ GROUND TRUTH
+                      Updates cache   │ - pages/*.md       │
+                                      │ - journals/*.md    │
+                                      └────────────────────┘
 ```
 
 ## Components

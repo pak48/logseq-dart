@@ -13,9 +13,6 @@ library logseq_dart;
 // Core client (database-backed)
 export 'src/client/logseq_client.dart';
 
-// Legacy client (in-memory) - for backward compatibility
-export 'src/client/logseq_client_legacy.dart' show LogseqClient as LogseqClientLegacy;
-
 // Models
 export 'src/models/block.dart';
 export 'src/models/page.dart';
