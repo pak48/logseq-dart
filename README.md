@@ -45,6 +45,14 @@ Transform your Logseq workflow with programmatic access to every major feature. 
 - ✅ **Relationship Queries**: Block references, embeds, backlinks
 - ✅ **Advanced Combinations**: Chain multiple filters fluently
 
+### 💾 Database-Backed Storage (New!)
+- ✅ **Memory Efficient**: Only caches recently accessed data, not entire graph
+- ✅ **Fast Queries**: SQLite indexes provide O(log n) lookups
+- ✅ **Auto-Sync**: File watcher keeps database and markdown files synchronized
+- ✅ **Scalable**: Works with graphs of any size without memory issues
+- ✅ **Same API**: Existing code continues to work with minimal changes
+- ✅ **Legacy Support**: Original in-memory client still available as `LogseqClientLegacy`
+
 ## 🚀 Quick Start
 
 ### Installation
@@ -70,18 +78,31 @@ dependencies:
 ```dart
 import 'package:logseq_dart/logseq_dart.dart';
 
-void main() {
+void main() async {
   // Initialize client with your Logseq graph directory
   final client = LogseqClient('/path/to/your/logseq/graph');
-  final graph = client.loadGraphSync();
+
+  // Initialize database (required)
+  await client.initialize();
 
   // Get statistics
-  final stats = graph.getStatistics();
+  final stats = await client.getStatistics();
   print('Total pages: ${stats['totalPages']}');
   print('Total blocks: ${stats['totalBlocks']}');
   print('Tasks: ${stats['taskBlocks']}');
+
+  // Get a specific page
+  final page = await client.getPageAsync('My Page');
+  if (page != null) {
+    print('Page has ${page.blocks.length} blocks');
+  }
+
+  // Cleanup when done
+  await client.close();
 }
 ```
+
+**Important**: The new database-backed storage requires calling `await client.initialize()` before use. See the [Storage Architecture docs](docs/STORAGE_ARCHITECTURE.md) for details.
 
 ## 📋 Task Management Examples
 

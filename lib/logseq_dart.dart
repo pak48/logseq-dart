@@ -6,10 +6,15 @@
 /// - Organization features (namespaces, templates, aliases, whiteboards)
 /// - Knowledge graph analytics and insights
 /// - Powerful query system with 25+ methods
+/// - Database-backed storage with automatic file sync
+/// - Memory-efficient lazy loading
 library logseq_dart;
 
-// Core client
+// Core client (database-backed)
 export 'src/client/logseq_client.dart';
+
+// Legacy client (in-memory) - for backward compatibility
+export 'src/client/logseq_client_legacy.dart' show LogseqClient as LogseqClientLegacy;
 
 // Models
 export 'src/models/block.dart';
@@ -23,3 +28,7 @@ export 'src/query/query_builder.dart';
 
 // Utils
 export 'src/utils/logseq_utils.dart';
+
+// Storage (for advanced usage)
+export 'src/storage/database.dart';
+export 'src/storage/cache.dart';

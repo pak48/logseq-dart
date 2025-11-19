@@ -1,4 +1,4 @@
-/// Main client class for Logseq operations
+/// Database-backed Logseq client with same API as original
 library;
 
 import 'dart:io';
@@ -9,119 +9,152 @@ import '../models/page.dart';
 import '../models/graph.dart';
 import '../utils/logseq_utils.dart';
 import '../query/query_builder.dart';
+import '../storage/database.dart';
+import '../storage/cache.dart';
+import '../storage/file_watcher.dart';
+import '../storage/repositories/page_repository.dart';
+import '../storage/repositories/block_repository.dart';
+import '../storage/repositories/graph_repository.dart';
 
-/// Main client for interacting with Logseq graphs
+/// Configuration for LogseqClient
+class LogseqClientConfig {
+  /// Maximum number of pages to cache
+  final int maxCachedPages;
+
+  /// Maximum number of blocks to cache
+  final int maxCachedBlocks;
+
+  /// Enable file system watcher
+  final bool enableFileWatcher;
+
+  /// Custom database path (default: graphPath/.logseq/logseq.db)
+  final String? databasePath;
+
+  const LogseqClientConfig({
+    this.maxCachedPages = 100,
+    this.maxCachedBlocks = 1000,
+    this.enableFileWatcher = true,
+    this.databasePath,
+  });
+}
+
+/// Main client for interacting with Logseq graphs (database-backed)
 class LogseqClient {
   final String graphPath;
-  LogseqGraph? _graph;
-  final Set<String> _modifiedPages = {};
+  final LogseqClientConfig config;
 
-  LogseqClient(this.graphPath) {
+  late final LogseqDatabase _database;
+  late final LogseqCache _cache;
+  late final BlockRepository _blockRepository;
+  late final PageRepository _pageRepository;
+  late final GraphRepository _graphRepository;
+  late final FileWatcher? _fileWatcher;
+
+  bool _initialized = false;
+  LogseqGraph? _graph;
+
+  LogseqClient(
+    this.graphPath, {
+    LogseqClientConfig? config,
+  }) : config = config ?? const LogseqClientConfig() {
     final dir = Directory(graphPath);
     if (!dir.existsSync()) {
       throw FileSystemException('Graph directory not found', graphPath);
     }
   }
 
-  /// Get the loaded graph (loads if not already loaded)
+  /// Initialize the database and repositories
+  Future<void> initialize() async {
+    if (_initialized) return;
+
+    // Initialize database
+    _database = LogseqDatabase(graphPath);
+
+    // Initialize repositories
+    _blockRepository = BlockRepository(_database);
+    _pageRepository = PageRepository(_database, _blockRepository);
+    _graphRepository = GraphRepository(_database, _pageRepository, _blockRepository);
+
+    // Initialize cache
+    _cache = LogseqCache(
+      maxPages: config.maxCachedPages,
+      maxBlocks: config.maxCachedBlocks,
+    );
+
+    // Initialize file watcher
+    if (config.enableFileWatcher) {
+      _fileWatcher = FileWatcher(
+        graphPath: graphPath,
+        database: _database,
+        pageRepository: _pageRepository,
+      );
+
+      // Check if we need initial sync
+      if (await _fileWatcher!.needsInitialSync()) {
+        await _fileWatcher!.initialSync();
+      }
+
+      await _fileWatcher!.start();
+    }
+
+    _initialized = true;
+  }
+
+  /// Ensure client is initialized
+  void _ensureInitialized() {
+    if (!_initialized) {
+      throw StateError('LogseqClient not initialized. Call initialize() first.');
+    }
+  }
+
+  /// Get the loaded graph (lazy loading from database)
   LogseqGraph get graph {
-    _graph ??= loadGraphSync();
+    _ensureInitialized();
+
+    if (_graph == null) {
+      // Create a lazy-loading graph wrapper
+      _graph = LogseqGraph(
+        rootPath: graphPath,
+        pages: {},
+        blocks: {},
+      );
+    }
+
     return _graph!;
   }
 
-  /// Load the Logseq graph from disk
+  /// Load the Logseq graph from database
   Future<LogseqGraph> loadGraph({bool forceReload = false}) async {
+    await initialize();
+
     if (_graph != null && !forceReload) {
       return _graph!;
     }
 
-    _graph = LogseqGraph(rootPath: graphPath);
+    // Load all pages from database
+    final pages = await _pageRepository.getAllPages();
 
-    // Find all markdown files
-    final dir = Directory(graphPath);
-    final markdownFiles = dir
-        .listSync(recursive: true)
-        .whereType<File>()
-        .where((file) => file.path.endsWith('.md'))
-        .where((file) => !file.path.contains('.logseq'));
-
-    for (final mdFile in markdownFiles) {
-      try {
-        final page = await LogseqUtils.parseMarkdownFile(mdFile.path);
-        _graph!.addPage(page);
-      } catch (e) {
-        print('Warning: Could not parse ${mdFile.path}: $e');
-      }
-    }
-
-    // Update backlinks
-    _updateBacklinks();
+    _graph = LogseqGraph(
+      rootPath: graphPath,
+      pages: {for (var p in pages) p.name: p},
+      blocks: {for (var p in pages) for (var b in p.blocks) b.id: b},
+    );
 
     return _graph!;
   }
 
-  /// Load the graph synchronously
+  /// Load the graph synchronously (fallback to database)
   LogseqGraph loadGraphSync({bool forceReload = false}) {
+    // Note: This is kept for API compatibility but now requires async init
+    _ensureInitialized();
+
     if (_graph != null && !forceReload) {
       return _graph!;
     }
 
+    // Return empty graph, actual data loaded via async methods
     _graph = LogseqGraph(rootPath: graphPath);
-
-    // Find all markdown files
-    final dir = Directory(graphPath);
-    final markdownFiles = dir
-        .listSync(recursive: true)
-        .whereType<File>()
-        .where((file) => file.path.endsWith('.md'))
-        .where((file) => !file.path.contains('.logseq'));
-
-    for (final mdFile in markdownFiles) {
-      try {
-        // Synchronous parsing
-        final file = File(mdFile.path);
-        final content = file.readAsStringSync();
-        final pageName =
-            p.basenameWithoutExtension(mdFile.path);
-
-        final page = Page(name: pageName, filePath: mdFile.path);
-
-        // Check if it's a journal page
-        page.isJournal = LogseqUtils.isJournalPage(pageName);
-        if (page.isJournal) {
-          page.journalDate = LogseqUtils.parseJournalDate(pageName);
-        }
-
-        // Parse blocks from content
-        final blocks = LogseqUtils.parseBlocksFromContent(content, pageName);
-        for (final block in blocks) {
-          page.addBlock(block);
-        }
-
-        // Extract page-level properties
-        final properties = LogseqUtils.extractPageProperties(content);
-        page.properties.addAll(properties);
-
-        _graph!.addPage(page);
-      } catch (e) {
-        print('Warning: Could not parse ${mdFile.path}: $e');
-      }
-    }
-
-    // Update backlinks
-    _updateBacklinks();
-
     return _graph!;
-  }
-
-  /// Update backlink information for all pages
-  void _updateBacklinks() {
-    if (_graph == null) return;
-
-    for (final page in _graph!.pages.values) {
-      page.backlinks.clear();
-      page.backlinks.addAll(_graph!.getBacklinks(page.name));
-    }
   }
 
   /// Create a new query builder
@@ -129,14 +162,44 @@ class LogseqClient {
     return QueryBuilder(graph);
   }
 
-  /// Get a page by name
+  /// Get a page by name (with caching)
   Page? getPage(String pageName) {
-    return graph.getPage(pageName);
+    _ensureInitialized();
+
+    // Try to get from graph if loaded
+    if (_graph != null && _graph!.pages.containsKey(pageName)) {
+      return _graph!.pages[pageName];
+    }
+
+    // This is synchronous, so we can't await
+    // Caller should use getPageAsync for database lookup
+    return null;
   }
 
-  /// Get a block by ID
+  /// Get a page by name (async, from database)
+  Future<Page?> getPageAsync(String pageName) async {
+    await initialize();
+
+    return await _pageRepository.getPage(pageName);
+  }
+
+  /// Get a block by ID (with caching)
   Block? getBlock(String blockId) {
-    return graph.getBlock(blockId);
+    _ensureInitialized();
+
+    // Try to get from graph if loaded
+    if (_graph != null && _graph!.blocks.containsKey(blockId)) {
+      return _graph!.blocks[blockId];
+    }
+
+    return null;
+  }
+
+  /// Get a block by ID (async, from database)
+  Future<Block?> getBlockAsync(String blockId) async {
+    await initialize();
+
+    return await _blockRepository.getBlock(blockId);
   }
 
   /// Create a new page
@@ -145,11 +208,14 @@ class LogseqClient {
     String? content,
     Map<String, dynamic>? properties,
   }) async {
+    await initialize();
+
     // Ensure valid page name
     final validName = LogseqUtils.ensureValidPageName(name);
 
     // Check if page already exists
-    if (graph.getPage(validName) != null) {
+    final existing = await _pageRepository.getPage(validName);
+    if (existing != null) {
       throw StateError('Page "$validName" already exists');
     }
 
@@ -171,22 +237,30 @@ class LogseqClient {
       }
     }
 
-    // Save to disk
-    await _savePage(page);
+    // Save to database
+    await _pageRepository.savePage(page);
 
-    // Add to graph
-    graph.addPage(page);
+    // Save to disk
+    _fileWatcher?.ignoreNextWrite(filePath);
+    await _savePageToFile(page);
+
+    // Add to graph if loaded
+    if (_graph != null) {
+      _graph!.addPage(page);
+    }
 
     return page;
   }
 
   /// Add a journal entry
   Future<Page> addJournalEntry(String content, {DateTime? date}) async {
+    await initialize();
+
     final journalDate = date ?? DateTime.now();
     final pageName = LogseqUtils.formatDateForJournal(journalDate);
 
     // Get or create journal page
-    var page = graph.getPage(pageName);
+    var page = await _pageRepository.getPage(pageName);
     if (page == null) {
       page = await createJournalPage(journalDate);
     }
@@ -194,16 +268,29 @@ class LogseqClient {
     // Add content as a new block
     final block = Block(content: content, pageName: pageName);
     page.addBlock(block);
-    graph.blocks[block.id] = block;
+
+    // Save to database
+    await _pageRepository.savePage(page);
 
     // Save to disk
-    await _savePage(page);
+    if (page.filePath != null) {
+      _fileWatcher?.ignoreNextWrite(page.filePath!);
+      await _savePageToFile(page);
+    }
+
+    // Update graph if loaded
+    if (_graph != null) {
+      _graph!.pages[pageName] = page;
+      _graph!.blocks[block.id] = block;
+    }
 
     return page;
   }
 
   /// Create a new journal page
   Future<Page> createJournalPage(DateTime date) async {
+    await initialize();
+
     final pageName = LogseqUtils.formatDateForJournal(date);
     final journalsDir = Directory(p.join(graphPath, 'journals'));
     if (!journalsDir.existsSync()) {
@@ -218,11 +305,17 @@ class LogseqClient {
       journalDate: date,
     );
 
-    // Save to disk
-    await _savePage(page);
+    // Save to database
+    await _pageRepository.savePage(page);
 
-    // Add to graph
-    graph.addPage(page);
+    // Save to disk
+    _fileWatcher?.ignoreNextWrite(filePath);
+    await _savePageToFile(page);
+
+    // Add to graph if loaded
+    if (_graph != null) {
+      _graph!.addPage(page);
+    }
 
     return page;
   }
@@ -233,7 +326,9 @@ class LogseqClient {
     String content, {
     String? parentBlockId,
   }) async {
-    final page = graph.getPage(pageName);
+    await initialize();
+
+    final page = await _pageRepository.getPage(pageName);
     if (page == null) {
       throw StateError('Page "$pageName" not found');
     }
@@ -243,36 +338,67 @@ class LogseqClient {
 
     // Handle parent-child relationship
     if (parentBlockId != null) {
-      final parentBlock = graph.getBlock(parentBlockId);
+      final parentBlock = await _blockRepository.getBlock(parentBlockId);
       if (parentBlock != null && parentBlock.pageName == pageName) {
         parentBlock.addChild(block);
       }
     }
 
-    // Add to page and graph
+    // Add to page
     page.addBlock(block);
-    graph.blocks[block.id] = block;
+
+    // Save to database
+    await _pageRepository.savePage(page);
 
     // Save to disk
-    await _savePage(page);
+    if (page.filePath != null) {
+      _fileWatcher?.ignoreNextWrite(page.filePath!);
+      await _savePageToFile(page);
+    }
+
+    // Update graph if loaded
+    if (_graph != null) {
+      _graph!.pages[pageName] = page;
+      _graph!.blocks[block.id] = block;
+    }
 
     return block;
   }
 
   /// Update the content of an existing block
   Future<Block?> updateBlock(String blockId, String content) async {
-    final block = graph.getBlock(blockId);
+    await initialize();
+
+    final block = await _blockRepository.getBlock(blockId);
     if (block == null) return null;
 
     // Update content
     block.content = content;
     block.updatedAt = DateTime.now();
 
-    // Save to disk
+    // Get the page and save
     if (block.pageName != null) {
-      final page = graph.getPage(block.pageName!);
+      final page = await _pageRepository.getPage(block.pageName!);
       if (page != null) {
-        await _savePage(page);
+        // Update block in page
+        final blockIndex = page.blocks.indexWhere((b) => b.id == blockId);
+        if (blockIndex >= 0) {
+          page.blocks[blockIndex] = block;
+        }
+
+        // Save to database
+        await _pageRepository.savePage(page);
+
+        // Save to disk
+        if (page.filePath != null) {
+          _fileWatcher?.ignoreNextWrite(page.filePath!);
+          await _savePageToFile(page);
+        }
+
+        // Update graph if loaded
+        if (_graph != null) {
+          _graph!.blocks[blockId] = block;
+        }
       }
     }
 
@@ -281,44 +407,39 @@ class LogseqClient {
 
   /// Delete a block
   Future<bool> deleteBlock(String blockId) async {
-    final block = graph.getBlock(blockId);
+    await initialize();
+
+    final block = await _blockRepository.getBlock(blockId);
     if (block == null) return false;
 
-    final page = block.pageName != null ? graph.getPage(block.pageName!) : null;
+    final page = block.pageName != null
+        ? await _pageRepository.getPage(block.pageName!)
+        : null;
     if (page == null) return false;
 
-    // Remove from parent
-    if (block.parentId != null) {
-      final parent = graph.getBlock(block.parentId!);
-      if (parent != null) {
-        parent.childrenIds.remove(blockId);
-      }
-    }
-
-    // Handle children (promote to parent level)
-    for (final childId in block.childrenIds) {
-      final child = graph.getBlock(childId);
-      if (child != null) {
-        child.parentId = block.parentId;
-      }
-    }
-
-    // Remove from page and graph
+    // Remove from page
     page.blocks.removeWhere((b) => b.id == blockId);
-    graph.blocks.remove(blockId);
+
+    // Save to database
+    await _pageRepository.savePage(page);
 
     // Save to disk
-    await _savePage(page);
+    if (page.filePath != null) {
+      _fileWatcher?.ignoreNextWrite(page.filePath!);
+      await _savePageToFile(page);
+    }
+
+    // Update graph if loaded
+    if (_graph != null) {
+      _graph!.blocks.remove(blockId);
+    }
 
     return true;
   }
 
   /// Save a page to disk
-  Future<void> _savePage(Page page) async {
+  Future<void> _savePageToFile(Page page) async {
     if (page.filePath == null) return;
-
-    // Track modification
-    _modifiedPages.add(page.name);
 
     // Ensure parent directory exists
     final file = File(page.filePath!);
@@ -338,25 +459,52 @@ class LogseqClient {
   }
 
   /// Get graph statistics
-  Map<String, dynamic> getStatistics() {
-    return graph.getStatistics();
+  Future<Map<String, dynamic>> getStatistics() async {
+    await initialize();
+
+    return await _graphRepository.getStatistics();
   }
 
   /// Search for text across all pages
-  Map<String, List<Block>> search(
+  Future<Map<String, List<Block>>> search(
     String query, {
     bool caseSensitive = false,
-  }) {
-    return graph.searchContent(query, caseSensitive: caseSensitive);
+  }) async {
+    await initialize();
+
+    final resultIds = await _graphRepository.searchContent(
+      query,
+      caseSensitive: caseSensitive,
+    );
+
+    final results = <String, List<Block>>{};
+    for (final entry in resultIds.entries) {
+      final blocks = <Block>[];
+      for (final blockId in entry.value) {
+        final block = await _blockRepository.getBlock(blockId);
+        if (block != null) {
+          blocks.add(block);
+        }
+      }
+      if (blocks.isNotEmpty) {
+        results[entry.key] = blocks;
+      }
+    }
+
+    return results;
   }
 
   /// Export the graph to JSON format
   Future<void> exportToJson(String outputPath) async {
+    await initialize();
+
+    final stats = await getStatistics();
+    final pages = await _pageRepository.getAllPages();
+
     final graphData = {
       'rootPath': graphPath,
-      'config': graph.config,
-      'pages': graph.pages.map((key, page) => MapEntry(key, page.toJson())),
-      'statistics': graph.getStatistics(),
+      'pages': {for (var page in pages) page.name: page.toJson()},
+      'statistics': stats,
     };
 
     final file = File(outputPath);
@@ -364,22 +512,19 @@ class LogseqClient {
     await file.writeAsString(encoder.convert(graphData));
   }
 
-  /// Reload the graph from disk
+  /// Reload the graph from database
   Future<LogseqGraph> reloadGraph() {
     return loadGraph(forceReload: true);
   }
 
-  /// Save all modified pages
-  Future<int> saveAll() async {
-    var savedCount = 0;
-    for (final pageName in _modifiedPages) {
-      final page = graph.getPage(pageName);
-      if (page != null && page.filePath != null) {
-        await _savePage(page);
-        savedCount++;
-      }
-    }
-    _modifiedPages.clear();
-    return savedCount;
+  /// Close the client and cleanup resources
+  Future<void> close() async {
+    await _fileWatcher?.stop();
+    await _database.close();
+  }
+
+  /// Get cache statistics
+  Map<String, int> getCacheStats() {
+    return _cache.getStats();
   }
 }

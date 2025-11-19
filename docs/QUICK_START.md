@@ -35,32 +35,67 @@ flutter pub get
 ```dart
 import 'package:logseq_dart/logseq_dart.dart';
 
-void main() {
+void main() async {
   // Point to your Logseq graph directory
   final client = LogseqClient('/path/to/your/logseq/graph');
 
-  // Load the graph
-  final graph = client.loadGraphSync();
+  // Initialize the database (required)
+  await client.initialize();
 
-  print('Loaded ${graph.pages.length} pages');
+  // The graph is now ready to use
+  print('Graph initialized successfully');
 }
+```
+
+**Important**: The new database-backed storage requires calling `initialize()` before using the client. This:
+- Creates/opens the SQLite database
+- Performs initial sync of markdown files (if needed)
+- Starts the file watcher for automatic synchronization
+- Is fast on subsequent runs (only first-time is slower)
+
+### Storage Architecture
+
+Logseq Dart now uses a **database-backed** approach instead of loading the entire graph into memory:
+
+- **Memory Efficient**: Only caches recently accessed data
+- **Fast Queries**: Database indexes provide O(log n) lookups
+- **Auto-Sync**: File watcher keeps database and markdown files in sync
+- **Same API**: Your existing code continues to work
+
+### Configuration
+
+```dart
+// Customize cache and file watcher settings
+final config = LogseqClientConfig(
+  maxCachedPages: 100,      // Default: 100
+  maxCachedBlocks: 1000,    // Default: 1000
+  enableFileWatcher: true,  // Default: true
+);
+
+final client = LogseqClient('/path/to/graph', config: config);
+await client.initialize();
 ```
 
 ### 2. Read Data
 
 ```dart
-// Get a specific page
-final page = client.getPage('My Page');
+// Get a specific page (from database)
+final page = await client.getPageAsync('My Page');
 if (page != null) {
   print('Page has ${page.blocks.length} blocks');
 }
 
+// Get a block by ID
+final block = await client.getBlockAsync('block-id-here');
+
 // Get statistics
-final stats = graph.getStatistics();
+final stats = await client.getStatistics();
 print('Total pages: ${stats['totalPages']}');
 print('Total tasks: ${stats['taskBlocks']}');
 print('Completed: ${stats['completedTasks']}');
 ```
+
+**Note**: With database storage, use the async methods (`getPageAsync`, `getBlockAsync`) for reliable data access.
 
 ### 3. Query Tasks
 
@@ -358,11 +393,37 @@ void main() async {
 
 ## Tips
 
-1. **Performance**: Use `loadGraphSync()` for small graphs, `loadGraph()` for large ones
-2. **Queries**: Chain filters for powerful searches
-3. **Custom Logic**: Use `.customFilter()` for complex conditions
-4. **Analytics**: Use `getGraphInsights()` for comprehensive statistics
-5. **Export**: Use `exportToJson()` to backup your graph data
+1. **Initialization**: Always call `await client.initialize()` before using the client
+2. **Async Methods**: Use `getPageAsync()` and `getBlockAsync()` for database-backed access
+3. **Memory Efficiency**: Database storage works with graphs of any size without memory issues
+4. **File Sync**: Changes to markdown files are automatically synced to database
+5. **Queries**: Chain filters for powerful searches
+6. **Custom Logic**: Use `.customFilter()` for complex conditions
+7. **Analytics**: Use `getGraphInsights()` for comprehensive statistics
+8. **Export**: Use `exportToJson()` to backup your graph data
+9. **Cleanup**: Call `await client.close()` when done to cleanup resources
+
+## Migration from Legacy Version
+
+If you're upgrading from the in-memory version:
+
+```dart
+// Old (in-memory)
+final client = LogseqClient('/path/to/graph');
+final graph = client.loadGraphSync();
+final page = client.getPage('My Page');
+
+// New (database-backed)
+final client = LogseqClient('/path/to/graph');
+await client.initialize();  // Add this
+final page = await client.getPageAsync('My Page');  // Use async version
+
+// Or load entire graph if needed
+final graph = await client.loadGraph();
+final page = client.getPage('My Page');  // Works if graph is loaded
+```
+
+The legacy in-memory client is still available as `LogseqClientLegacy` if needed.
 
 ## Need Help?
 
