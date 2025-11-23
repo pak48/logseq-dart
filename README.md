@@ -468,3 +468,5 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## 📧 Support
 
 For issues, questions, or feature requests, please [open an issue](https://github.com/pak48/logseq-dart/issues) on GitHub.
+
+Always make sure flutter is in your PATH first. If it isn't, then download it from https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.38.3-stable.tar.xz and unzip it, then add it to the PATH.
